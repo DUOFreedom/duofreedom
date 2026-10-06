@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>terminal://kai</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    background:#070a0f;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display:flex; align-items:center; justify-content:center;
+    padding:16px; overflow:hidden; position:relative;
+  }
+  /* 背景光晕 */
+  body::before {
+    content:""; position:absolute; inset:-30%;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(0,255,170,0.08), transparent 45%),
+      radial-gradient(circle at 75% 80%, rgba(80,140,255,0.10), transparent 45%);
+    animation: drift 18s ease-in-out infinite alternate;
+  }
+  @keyframes drift { to { transform: translate3d(3%, -3%, 0) scale(1.08); } }
+
+  .win {
+    position:relative; width:100%; max-width:680px; height:min(78vh, 560px);
+    background:rgba(10,14,20,0.86);
+    border:1px solid rgba(0,255,170,0.22);
+    border-radius:14px; overflow:hidden;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 24px 60px rgba(0,0,0,0.7),
+                0 0 80px rgba(0,255,170,0.06);
+    backdrop-filter: blur(6px);
+    display:flex; flex-direction:column;
+  }
+  .bar {
+    display:flex; align-items:center; gap:8px;
+    padding:11px 14px; background:rgba(255,255,255,0.03);
+    border-bottom:1px solid rgba(255,255,255,0.06);
+  }
+  .dot { width:11px; height:11px; border-radius:50%; }
+  .r{background:#ff5f57}.y{background:#febc2e}.g{background:#28c840}
+  .title { margin-left:8px; font-size:12px; color:#5f7a86; letter-spacing:0.5px; }
+
+  .screen {
+    flex:1; padding:16px 16px 8px; overflow-y:auto;
+    font-size:13.5px; line-height:1.65; color:#c7d3d0;
+    text-shadow:0 0 6px rgba(0,255,170,0.10);
+  }
+  .screen::-webkit-scrollbar { width:6px; }
+  .screen::-webkit-scrollbar-thumb { background:rgba(0,255,170,0.25); border-radius:3px; }
+
+  .line { white-space:pre-wrap; word-break:break-word; animation:fade .22s ease both; }
+  @keyframes fade { from{opacity:0; transform:translateY(3px)} to{opacity:1; transform:none} }
+  .p   { color:#00ffaa; }          /* prompt */
+  .ok  { color:#28c840; }
+  .warn{ color:#febc2e; }
+  .err { color:#ff6b6b; }
+  .dim { color:#5f7a86; }
+  .cy  { color:#66d9ff; }
+  .mg  { color:#ff7ad9; }
+  .logo{ color:#00ffaa; text-shadow:0 0 12px rgba(0,255,170,0.5); }
+
+  .input-row {
+    display:flex; align-items:center; gap:8px;
+    padding:10px 16px 14px; border-top:1px solid rgba(255,255,255,0.06);
+    background:rgba(0,0,0,0.25);
+  }
+  .input-row .ps1 { color:#00ffaa; font-size:13.5px; }
+  #cmd {
+    flex:1; background:transparent; border:none; outline:none;
+    color:#e6fff6; font:inherit; font-size:13.5px; caret-color:#00ffaa;
+  }
+  .cursor { display:inline-block; width:8px; height:15px; background:#00ffaa;
+            animation:blink 1s steps(1) infinite; vertical-align:-2px; }
+  @keyframes blink { 50% { opacity:0; } }
+  /* CRT 扫描线 */
+  .scan { position:absolute; inset:0; pointer-events:none;
+          background:repeating-linear-gradient(180deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.14) 2px 3px);
+          mix-blend-mode:multiply; opacity:.5; }
+</style>
+</head>
+<body>
+  <div class="win">
+    <div class="bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">kai — /bin/sh — 80x24</span>
+    </div>
+    <div class="screen" id="screen"></div>
+    <div class="input-row" id="row" style="display:none">
+      <span class="ps1">kai@device:~$</span>
+      <input id="cmd" autocomplete="off" spellcheck="false" placeholder="输入 help 看看">
+      <span class="cursor"></span>
+    </div>
+    <div class="scan"></div>
+  </div>
+
+<script>
+const screen = document.getElementById('screen');
+const row    = document.getElementById('row');
+const cmdEl  = document.getElementById('cmd');
+
+const BOOT = [
+  ['dim',  'Kai Runtime v2.6  —  sandbox: alpine/aarch64 (proot)'],
+  ['dim',  'local time 2026-10-06 22:5x  ·  tz Asia/Shanghai'],
+  ['',     ''],
+  ['ok',   '[  OK  ] mounted /root (persistent)'],
+  ['ok',   '[  OK  ] network wlan0 up  → 192.168.31.209/24'],
+  ['ok',   '[  OK  ] loaded tools: adb, ssh, sftp, python3, node'],
+  ['warn', '[ WARN ] adb device 192.168.31.142:5555  →  unreachable'],
+  ['dim',  '         └─ phone offline? bootloop? check 0.12.9.'],
+  ['',     ''],
+  ['logo', '  ██╗  ██╗  █████╗  ██╗'],
+  ['logo', '  ██║ ██╔╝ ██╔══██╗ ██║'],
+  ['logo', '  █████╔╝  ███████║ ██║'],
+  ['logo', '  ██╔═██╗  ██╔══██║ ██║'],
+  ['logo', '  ██║  ██╗ ██║  ██║ ██║'],
+  ['logo', '  ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝'],
+  ['dim',  '        与小助理一起成长'],
+  ['',     ''],
+  ['cy',   '系统就绪。输入 help 查看可用命令。'],
+];
+
+function esc(t){ return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function add(cls, text){
+  const d = document.createElement('div');
+  d.className = 'line ' + cls;
+  d.innerHTML = esc(text) || '&nbsp;';
+  screen.appendChild(d);
+  screen.scrollTop = screen.scrollHeight;
+  return d;
+}
+
+async function boot(){
+  for (const [cls,text] of BOOT){
+    add(cls, text);
+    await new Promise(r => setTimeout(r, text ? 90 + Math.random()*120 : 40));
+  }
+  row.style.display = 'flex';
+  cmdEl.focus();
+}
+
+// ---- 迷你命令解析 ----
+const COMMANDS = {
+  help(){
+    add('cy','可用命令：');
+    add('dim','  help      显示这条帮助');
+    add('dim','  whoami    我是谁');
+    add('dim','  date      当前时间');
+    add('dim','  uname     运行环境');
+    add('dim','  echo X    原样回显 X');
+    add('dim','  clear     清屏');
+    add('dim','  reboot    哈哈，别怕，只是玩笑');
+  },
+  whoami(){ add('','kai · 一个会连 adb、读内核日志、也不乱开端口的小助理'); },
+  date(){ add('', new Date().toString()); },
+  uname(){ add('','Linux alpine 4.4.153-perf aarch64 (proot) — 沙箱跑在手机侧的容器里'); },
+  clear(){ screen.innerHTML=''; },
+  reboot(){
+    add('warn','[ WARN ] 拒绝执行：重启是设备的事，我只负责别把它弄崩。');
+    add('dim', '         （顺便一提，0.13.9 还是别刷。）');
+  },
+};
+COMMANDS.echo = (a)=> add('', a.join(' '));
+
+function run(raw){
+  const line = raw.trim();
+  add('','');
+  const echo = add('p', 'kai@device:~$ ' + line);
+  echo.classList.remove('p'); echo.classList.add('p');
+  if (!line) return;
+  const [c,...args] = line.split(/\s+/);
+  const fn = COMMANDS[c.toLowerCase()];
+  if (fn) fn(args);
+  else add('err', `sh: ${c}: command not found`);
+}
+
+cmdEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter'){
+    run(cmdEl.value);
+    cmdEl.value = '';
+  }
+});
+
+boot();
+</script>
+</body>
+</html>
